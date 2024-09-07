@@ -1,14 +1,11 @@
 """Contains dataset classes to be used by the model."""
 import numpy as np
-import torch
 from torch.utils.data import Dataset
 import time, os, h5py
 
-DEFAULT_DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
 class SGOverlay(Dataset):
 
-    def __init__(self, files=[], dtype=torch.float32, in_memory=False, ignore=[], device=DEFAULT_DEVICE):
+    def __init__(self, files=[], dtype=np.float32, in_memory=False, ignore=[]):
         """Instantiates the SGOverlay dataset.
 
         Parameters
@@ -25,7 +22,6 @@ class SGOverlay(Dataset):
 
         self._in_memory = in_memory
         self._dtype = dtype
-        self._device= DEFAULT_DEVICE
         if files:
             self.register_files(files,ignore)
 
@@ -98,7 +94,7 @@ class SGOverlay(Dataset):
                     raise ValueError(f'Attribute {k} has length {f[k].shape[0]} but expected {num_entry} from {keys[0]}')
 
                 if self._in_memory:
-                    in_memory[k].append(torch.as_tensor(np.array(f[k]),dtype=self._dtype))
+                    in_memory[k].append(np.array(f[k],dtype=self._dtype))
 
             num_entries.append(num_entry)
             file_index.append(np.ones(num_entry,dtype=np.uint16))
@@ -110,7 +106,7 @@ class SGOverlay(Dataset):
             print('[SGOverlay] Loading data in memory')
             self._in_memory=dict()
             for key,val in in_memory.items():
-                self._in_memory[key] = torch.cat(val).to(self._device)
+                self._in_memory[key] = np.concatenate(val)
 
 
         self._keys = keys
@@ -118,13 +114,6 @@ class SGOverlay(Dataset):
         self._num_entries = np.array(num_entries)
         self._file_index = np.concatenate(file_index)
         print('[SGOverlay] Finished reading files (%.3f [s] %d entries)' % (time.time()-t0,self._num_entries.sum()))
-
-
-    def to(self,device):
-        if self._in_memory:
-            self._in_memory = self._in_memory.to(device)
-        self._device = device
-
 
     def __len__(self):
         """Returns the lenght of the dataset (in number of batches).
@@ -160,13 +149,13 @@ class SGOverlay(Dataset):
                 offset = self._num_entries[:fidx+1].sum()
                 local_idx = idx - offset
                 for key in self._keys:
-                    data[key].append(torch.as_tensor(self._h5fs[fidx][key][local_idx],dtype=self._dtype))
+                    data[key].append(np.array(self._h5fs[fidx][key][local_idx],dtype=self._dtype))
             if len(data[self._keys[0]]) < 2:
                 for key in self._keys:
                     data[key]=data[key][0]
             else:
                 for key in self._keys:
-                    data[key]=torch.cat(data[key]).to(self._device)
+                    data[key]=np.concatenate(data[key])
             return data
 
 
