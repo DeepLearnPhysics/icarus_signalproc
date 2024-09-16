@@ -72,8 +72,8 @@ class SGOverlayLoss(torch.nn.Module):
                     reg_loss = 0
                 else:
                     reg_loss = self.rg_criterion(pred_regressor[self.reg_mask],target_regressor[self.reg_mask])
-                    print(pred_regressor[self.reg_mask].sum(),target_regressor[self.reg_mask].sum())
-                    print((pred_regressor-target_regressor).sum(),(pred_regressor-target_regressor)[self.reg_mask].sum())    
+                    #print(pred_regressor[self.reg_mask].sum(),target_regressor[self.reg_mask].sum())
+                    #print((pred_regressor-target_regressor).sum(),(pred_regressor-target_regressor)[self.reg_mask].sum())    
 
             result['regressor_loss']=reg_loss
             if len(self.weights):
