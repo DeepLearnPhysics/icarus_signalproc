@@ -1,5 +1,5 @@
 import torch
-from isproc.util import instantiate
+from torcher.util import instantiate
 
 class SGOverlayLoss(torch.nn.Module):
 
