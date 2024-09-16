@@ -20,7 +20,7 @@ setup(
     },
     url='https://github.com/DeepLearnPhysics/icarus_signalproc',
     #scripts=['bin/run_flow2supera.py'],
-    packages=['isproc','isproc/models'],
+    packages=['isproc'],
     package_dir={'': 'src'},
     #package_data={'flow2supera': ['config_data/*.yaml']},
     install_requires=[

@@ -5,7 +5,7 @@ import time, os, h5py
 
 class SGOverlay(Dataset):
 
-    def __init__(self, files=[], dtype=np.float32, in_memory=False, ignore=[]):
+    def __init__(self, files=[], dtype=np.float32, in_memory=False, ignore=[], read_fraction=[0.0,1.0]):
         """Instantiates the SGOverlay dataset.
 
         Parameters
@@ -23,7 +23,7 @@ class SGOverlay(Dataset):
         self._in_memory = in_memory
         self._dtype = dtype
         if files:
-            self.register_files(files,ignore)
+            self.register_files(files,ignore,read_fraction)
 
     def __del__(self):
 
@@ -31,7 +31,7 @@ class SGOverlay(Dataset):
             for f in self._h5fs:
                 f.close()
 
-    def register_files(self,files,ignore=[]):
+    def register_files(self,files,ignore=[],read_fraction=[0.0,1.0],image_shape=[128,128]):
         """Register the input files. If self.in_memory, also copy data into memory.
 
         Parameters
@@ -42,6 +42,7 @@ class SGOverlay(Dataset):
             Data attributes in some or all input files to be ignored from reading
         """
         t0=time.time()
+        self._image_shape=list(image_shape)
         # constrain the files type
         if isinstance(files, str):
             files=[files]
@@ -64,6 +65,7 @@ class SGOverlay(Dataset):
         self._h5fs = []
         in_memory   = {}
         file_index  = []
+        local_index = []
         num_entries = []
         keys = []
         #
@@ -81,22 +83,28 @@ class SGOverlay(Dataset):
                 if self._in_memory:
                     in_memory = {key:[] for key in keys}
 
-            print('[SGOverlay] Reading file %-2d: %s' % (idx,file_name))
+            print('[SGOverlay] Reading file %-2d: %s ... %.2f => %.2f' % (idx,file_name,read_fraction[0],read_fraction[1]))
 
             # Check if data attribute keys found exist in all files
             num_entry = None
+            start,end=read_fraction
             for k in keys:
                 if not k in f.keys():
                     raise KeyError(f'[SGOverlay] Attribute "{k}" not found in {file_name}')
                 if num_entry is None:
                     num_entry = f[k].shape[0]
+                    start = int(start*num_entry)
+                    end   = int(end*num_entry)
                 elif not num_entry == f[k].shape[0]:
                     raise ValueError(f'Attribute {k} has length {f[k].shape[0]} but expected {num_entry} from {keys[0]}')
 
                 if self._in_memory:
-                    in_memory[k].append(np.array(f[k],dtype=self._dtype))
-
+                    in_memory[k].append(np.array(f[k][start:end],dtype=self._dtype))
+                    shape = [end-start,1]+list(self._image_shape)
+                    in_memory[k][-1]=in_memory[k][-1].reshape(shape)
+            num_entry = end-start
             num_entries.append(num_entry)
+            local_index.append(np.arange(start,end))
             file_index.append(np.ones(num_entry,dtype=np.uint16))
             file_index[-1] *= idx
 
@@ -108,11 +116,25 @@ class SGOverlay(Dataset):
             for key,val in in_memory.items():
                 self._in_memory[key] = np.concatenate(val)
 
-
         self._keys = keys
         self._files = files
         self._num_entries = np.array(num_entries)
-        self._file_index = np.concatenate(file_index)
+        file_index  = np.concatenate(file_index )
+        local_index = np.concatenate(local_index)
+
+        self._file_index,self._local_index=dict(),dict()
+        for key in self._keys:
+            self._file_index[key]  = file_index.copy()
+            self._local_index[key] = local_index.copy()
+        self._raw_file_index  = file_index 
+        self._raw_local_index = local_index
+
+        # index mappings
+        self._forward_mapping, self._backward_mapping = dict(), dict()
+        for key in self._keys:
+            self._forward_mapping[key]  = np.arange(len(self))
+            self._backward_mapping[key] = np.arange(len(self))
+
         print('[SGOverlay] Finished reading files (%.3f [s] %d entries)' % (time.time()-t0,self._num_entries.sum()))
 
     def __len__(self):
@@ -141,23 +163,66 @@ class SGOverlay(Dataset):
         # Read in a specific entry
 
         if self._in_memory:
-            return {key:self._in_memory[key][idx] for key in self._keys}
+            data = {key:self._in_memory[key][idx] for key in self._keys}
+            for key in self._keys:
+                data['index_'+key] = self._forward_mapping[key][idx]
+            return data
         else:
             data={key:[] for key in self._keys}
-            file_index = self._file_index[idx]
-            for fidx in np.unique(file_index):
-                offset = self._num_entries[:fidx+1].sum()
-                local_idx = idx - offset
+
+            if hasattr(idx,"__len__"):
                 for key in self._keys:
-                    data[key].append(np.array(self._h5fs[fidx][key][local_idx],dtype=self._dtype))
-            if len(data[self._keys[0]]) < 2:
-                for key in self._keys:
-                    data[key]=data[key][0]
+                    file_index  = self._file_index[key][idx]
+                    local_index = self._local_index[key][idx]
+                    data[key]=np.array(self._h5fs[file_index][[key]*len(file_index)][local_index],dtype=self._dtype)
+                    shape=[len(idx)]+self._image_shape
+                    data[key].reshape(shape)
+                    data['index_'+key] = self._forward_mapping[key][idx]
             else:
                 for key in self._keys:
-                    data[key]=np.concatenate(data[key])
+                    file_index  = self._file_index[key][idx]
+                    local_index = self._local_index[key][idx]
+                    data[key]=self._h5fs[file_index][key][local_index]
+                    data[key].reshape(self._image_shape)
+                    data['index_'+key] = self._forward_mapping[key][idx]
             return data
 
+    def shuffle(self,keep_alignment=False):
+
+        # first, align back to the raw data
+        self.reset_shuffle()
+
+        if keep_alignment:
+            idx_v = np.arange(len(self))
+            np.random.shuffle(idx_v)
+            for key in self._keys:
+                self._forward_mapping[key]  = idx_v
+                self._backward_mapping[key] = np.zeros(len(idx_v),dtype=int)
+                self._backward_mapping[key][idx_v] = np.arange(len(idx_v))
+                self._file_index[key]  = self._file_index[key][idx_v]
+                self._local_index[key] = self._local_index[key][idx_v]
+                self._in_memory[key]   = self._in_memory[key][idx_v]
+        else:
+            for key in self._keys:
+                idx_v = np.arange(len(self))
+                np.random.shuffle(idx_v)
+                self._forward_mapping[key]  = idx_v
+                self._backward_mapping[key] = np.zeros(len(idx_v),dtype=int)
+                self._backward_mapping[key][idx_v] = np.arange(len(idx_v))
+                self._file_index[key]  = self._file_index[key][idx_v]
+                self._local_index[key] = self._local_index[key][idx_v]
+                self._in_memory[key]   = self._in_memory[key][idx_v]
+
+    def reset_shuffle(self):
+        for key in self._keys:
+            self._file_index[key]  = self._file_index[key][self._backward_mapping[key]]
+            self._local_index[key] = self._local_index[key][self._backward_mapping[key]]
+            assert (self._file_index[key]  == self._raw_file_index).sum()  == len(self._file_index[key])
+            assert (self._local_index[key] == self._raw_local_index).sum() == len(self._local_index[key])
+            self._in_memory[key] = self._in_memory[key][self._backward_mapping[key]]
+
+            self._forward_mapping[key] = np.arange(len(self._forward_mapping[key]))
+            self._backward_mapping[key] = np.arange(len(self._backward_mapping[key]))
 
     def data_keys(self):
         """Returns a list of data product names.
