@@ -32,10 +32,14 @@ class SGOverlayLoss(torch.nn.Module):
             target_classifier = target['classifier']
 
             if self.weight_stats:
-                stat_weights = torch.zeros_like(target_classifier,dtype=torch.float16)
+                stat_weights = torch.zeros_like(target_classifier,dtype=torch.float32)
                 for class_type in torch.unique(target_classifier):
                     mask = target_classifier == class_type
-                    stat_weights[mask] = (1./torch.sqrt(mask.sum())).type(stat_weights.dtype)
+                    weight_factor = (1./torch.sqrt(mask.sum())).type(stat_weights.dtype)
+                    stat_weights[mask] = weight_factor
+
+                    print(class_type.item(),mask.sum().item(),weight_factor)
+                    
                 stat_weights = stat_weights / stat_weights.sum()
 
                 loss = (self.cl_criterion(pred_classifier,target_classifier) * stat_weights).mean()

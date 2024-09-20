@@ -2,50 +2,14 @@ import h5py as h5
 import numpy as np
 import tqdm
 
-def draw_track(num_tracks_max=5,image_size=128,step_size=0.2,spread=0.5,qmean=80,qspread=0.2,cluster_size=100,min_pixel=5,seed=None):
-    '''Generate an image of track-like signal.
+def draw_track(num_tracks_max=5,img_size=128,step_size=0.2,spread=0.5,qmean=6.5,qspread=0.2,cluster_size=100,min_pixel=5,seed=None):
 
-    A track-like signal is generated in the following steps:
-        1) randomly sample two points = start and end of a track
-        2) uniformly (every {step_size} in the pixel unit) sample along the straight line that connects start to the end a
-        3) per sampled point along the track, generate {cluster_size} energy depositions. The position of each deposition is sampled
-        from the normal distribution with the width {spread} and the amount of energy also sampled from a normal distibution with
-        the mean {qmean/cluster_size} and std {qsigma}. 
-        4) the generated track is "valid" if the outcome of step 3 filles more than {min_pixel} pixels.
-
-    Parameters:
-    -----------
-    num_tracks_max : int
-        The generated image will contain N tracks where N is sampled between [0,num_tracks_max] (see step 1)
-    image_size : int
-        The size of a (square) image to be generated. Should be the pixel count on one side.
-    step_size : float
-        The step-size along the sampled trajectory to generate energy depositions (see step 3)
-    spread : float
-        The position smearing size in the unit of pixels. This is used as the std of a normal distribution (see step 3)
-    qmean : float
-        The mean of the sum of all charge depositions per sampled point along the trajectory (note, the sum of all {cluster_size} depositions)
-    qspread : float
-        The std of all charge depositions per generated energy depositions.
-    cluster_size : int
-        The number of energy depositions to be sampled per point sampled along the particle trajectory
-    min_pixel : int
-        The minimum number of pixels in the image for a track to be considered valid
-    seed : int
-        The numpy random seed for reproducibility. If None, seed is not set.
-
-    Returns:
-    --------
-    np.ndarray
-        An image of tracks with the shape (image_size,image_size)
-
-    '''
     if not seed is None:
         np.random.seed(int(seed))
-    img=np.zeros(shape=(image_size,image_size),dtype=np.float32)
-    #window_size = np.sqrt(2)*image_size
-    window_size = image_size
-    coord_min=(window_size - image_size)/2.
+    img=np.zeros(shape=(img_size,img_size),dtype=np.float32)
+    #window_size = np.sqrt(2)*img_size
+    window_size = img_size
+    coord_min=(window_size - img_size)/2.
     coord_max=window_size-coord_min
 
     num_tracks = int(np.random.random()*num_tracks_max)+1
@@ -57,30 +21,28 @@ def draw_track(num_tracks_max=5,image_size=128,step_size=0.2,spread=0.5,qmean=80
         unit_dir = np.array([ye-ys,xe-xs]) / total_length
         num_points = int(total_length / step_size)+1
         
-        charge=np.random.uniform(qmean/cluster_size,qspread,num_points*cluster_size).astype(np.float32)
-        xidx=np.random.uniform(0.,spread,num_points*cluster_size).astype(np.float32)
-        yidx=np.random.uniform(0.,spread,num_points*cluster_size).astype(np.float32)
+        charge=np.random.normal(1.0,qspread,num_points*cluster_size).astype(np.float32) * qmean / cluster_size
+        xidx=np.random.normal(0.,spread,num_points*cluster_size).astype(np.float32)
+        yidx=np.random.normal(0.,spread,num_points*cluster_size).astype(np.float32)
+        #charge /= (0.01+xidx**2+yidx**2)
+        
         for i in range(num_points):
             start=i*cluster_size
             end=(i+1)*cluster_size
             xidx[start:end] += i*step_size*unit_dir[0]+xs
             yidx[start:end] += i*step_size*unit_dir[1]+ys
-
+      
         mask = (xidx > coord_min) & (xidx < coord_max) & (yidx > coord_min) & (yidx < coord_max)
 
         if mask.sum() < min_pixel:
             continue
-        #else:
-        #    print(f'accept ({xidx.min(),yidx.min()}) => ({yidx.min(),yidx.max()})')
-
         num_tracks -= 1
         
         xidx = (xidx[mask]-coord_min).astype(int)
         yidx = (yidx[mask]-coord_min).astype(int)
         charge = charge[mask]
+        np.add.at(img, (xidx,yidx), charge)
 
-        img[xidx,yidx]+=charge        
-            
     return img
 
 def update_signal_in_h5(fname,signal_key,**kwargs):
