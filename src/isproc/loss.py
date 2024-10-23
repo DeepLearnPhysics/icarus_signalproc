@@ -3,7 +3,7 @@ from torcher.util import instantiate
 
 class SGOverlayLoss(torch.nn.Module):
 
-    def __init__(self, Weights=[1.,1.], RegressorMask=[], EnableStatWeight=True, RegressorLoss=None, ClassifierLoss=None):
+    def __init__(self, NumClass=2, Weights=[1.,1.], RegressorMask=[], EnableStatWeight=True, RegressorLoss=None, ClassifierLoss=None):
         super().__init__()
         self.rg_criterion, self.cl_criterion = None, None
         self.weights=torch.as_tensor(Weights)
@@ -16,6 +16,7 @@ class SGOverlayLoss(torch.nn.Module):
 
         if len(self.regressor_mask) and self.cl_criterion is None:
             raise NotImplementedError(f'[SGOverlayLoss] must provide ClassifierLoss to apply RegressorMask')
+        self.num_class = int(NumClass)
     
     def forward(self,prediction,target):
 
@@ -31,6 +32,20 @@ class SGOverlayLoss(torch.nn.Module):
             pred_classifier   = prediction['classifier']
             target_classifier = target['classifier']
 
+            total_stat = torch.prod(torch.as_tensor(target_classifier.shape))
+
+            grade = torch.argmax(pred_classifier,dim=1) == target_classifier
+            result['acc_classifier'] = (grade.sum() / total_stat).item()
+
+            assert self.num_class > torch.max(target_classifier)
+            for class_type in torch.arange(self.num_class):
+                mask = target_classifier == class_type
+                result[f'num_class{int(class_type.item())}'] = mask.sum()
+                if mask.sum() > 0:
+                    result[f'acc_class{int(class_type.item())}'] = (grade[mask].sum() / mask.sum()).item()
+                else:
+                    result[f'acc_class{int(class_type.item())}'] = -1.
+
             if self.weight_stats:
                 stat_weights = torch.zeros_like(target_classifier,dtype=torch.float32)
                 for class_type in torch.unique(target_classifier):
@@ -38,7 +53,7 @@ class SGOverlayLoss(torch.nn.Module):
                     weight_factor = (1./torch.sqrt(mask.sum())).type(stat_weights.dtype)
                     stat_weights[mask] = weight_factor
                     
-                stat_weights = stat_weights / stat_weights.sum() * torch.prod(torch.as_tensor(stat_weights.shape))
+                stat_weights = stat_weights / stat_weights.sum() * total_stat
 
                 loss = (self.cl_criterion(pred_classifier,target_classifier) * stat_weights).mean()
 
@@ -78,6 +93,7 @@ class SGOverlayLoss(torch.nn.Module):
                     #print((pred_regressor-target_regressor).sum(),(pred_regressor-target_regressor)[self.reg_mask].sum())    
 
             result['regressor_loss']=reg_loss
+
             if len(self.weights):
                 loss = loss + self.weights[1]*reg_loss
             else:
